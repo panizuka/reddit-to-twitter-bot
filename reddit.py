@@ -1,8 +1,13 @@
+# reddit.py
+
 import praw
 import requests
 import os
+import re
+import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
 
+load_dotenv('config.env')
 
 MINIMUM_SCORE = 0
 MAX_PHOTO_SIZE = 5242880
@@ -10,13 +15,17 @@ MAX_GIF_SIZE = 15728640
 MAX_VIDEO_SIZE = 536870912
 
 def check_size(url, max_bytes):
-    response = requests.head(url)
-    content_length = response.headers.get("Content-Length")
-    return content_length and int(content_length) < max_bytes
+    """Vérifie si la taille du contenu d'une URL est inférieure à un seuil."""
+    try:
+        response = requests.head(url, timeout=10)
+        response.raise_for_status()
+        content_length = response.headers.get("Content-Length")
+        return content_length and int(content_length) < max_bytes
+    except requests.RequestException:
+        return False
 
 def reddit_api():
-    load_dotenv('config.env')
-
+    """Initialise et retourne une instance de l'API Reddit."""
     reddit = praw.Reddit(
         client_id=os.getenv('REDDIT_CLIENT_ID'),
         client_secret=os.getenv('REDDIT_CLIENT_SECRET'),
@@ -24,124 +33,183 @@ def reddit_api():
         password=os.getenv('REDDIT_PASSWORD'),
         username=os.getenv('REDDIT_USERNAME')
     )
-    
     return reddit
 
+def is_submission_valid(submission):
+    """Vérifie si une soumission est valide pour être tweetée (score, type, taille)."""
+    if submission.score < MINIMUM_SCORE or submission.saved or submission.spoiler or submission.over_18:
+        return False
+
+    url = submission.url
+    
+    if 'v.redd.it' in url:
+        # Pour les vidéos, l'URL de fallback est souvent plus fiable pour la taille
+        video_url = submission.media["reddit_video"]["fallback_url"]
+        return check_size(video_url, MAX_VIDEO_SIZE)
+    
+    if url.endswith('.gif'):
+        return check_size(url, MAX_GIF_SIZE)
+
+    if url.endswith(('.jpg', '.png', '.jpeg')):
+        return check_size(url, MAX_PHOTO_SIZE)
+
+    if "/gallery/" in url:
+        # Vérifie si au moins une image de la galerie est valide
+        for item in submission.gallery_data['items']:
+            media_id = item['media_id']
+            meta = submission.media_metadata[media_id]
+            if meta['e'] == 'Image':
+                ext = meta['m'].split('/')[-1]
+                if ext in ["jpg", "png", "jpeg"] and check_size(meta['s']['u'], MAX_PHOTO_SIZE):
+                    return True  # Une seule image valide suffit
+        return False  # Aucune image valide trouvée dans la galerie
+
+    return False
+
 def get_submission(reddit_instance):
-    found = False
-    while not found:
-        # The multireddit can be changed here
-        subreddit = reddit_instance.multireddit('top_anime_13', 'topanime')
-        for submission in subreddit.hot():
-            if submission.score < MINIMUM_SCORE or submission.saved or submission.spoiler or submission.over_18:
-                continue
-            
-            if 'v.redd.it' in submission.url:
-                if check_size(submission.url, MAX_VIDEO_SIZE):
-                    found = True
-                    break
-                else:
-                    # video file size too big, save and skip
-                    submission.save()
-                    continue
-
-            if submission.url.endswith('.gif'):
-                if check_size(submission.url, MAX_GIF_SIZE):
-                    found = True
-                    break
-                else:
-                    # gif file size too big, save and skip
-                    submission.save()
-                    continue
-
-            if submission.url.endswith(('.jpg', '.png', '.jpeg')):
-                if check_size(submission.url, MAX_PHOTO_SIZE):
-                    found = True
-                    break
-                else:
-                    # image file size too big, save and skip
-                    submission.save()
-                    continue
-
-            if "/gallery/" in submission.url:
-                correct_gallery = False
-                for item in sorted(submission.gallery_data['items'], key=lambda x: x['id']):
-                    media_id = item['media_id']
-                    meta = submission.media_metadata[media_id]
-                    if meta['e'] == 'Image':
-                        extension = meta['m'].split('/')
-                        if len(extension) < 2:
-                            continue
-                        
-                        source = meta['s']
-                        if (extension[1] == "jpg" or extension[1] == "png" or extension[1] == "jpeg") and check_size(source['u'], MAX_PHOTO_SIZE):
-                            correct_gallery = True
-                            break
-                
-                if correct_gallery:
-                    found = True
-                    break
-                else:
-                    submission.save()
-                    continue
-
-    if found:
-        return submission
-    else:
-        raise Exception("No submission found")
+    """Récupère une soumission valide depuis le multireddit."""
+    subreddit = reddit_instance.multireddit('top_anime_13', 'topanime')
+    
+    # On limite la recherche pour éviter les boucles infinies
+    for submission in subreddit.hot(limit=100):
+        if is_submission_valid(submission):
+            return submission
+        else:
+            # La soumission n'est pas valide, on la sauvegarde pour ne pas la revoir
+            # submission.save()
+            continue
+    
+    raise Exception("Aucune soumission valide n'a été trouvée dans les 100 derniers posts 'hot'.")
 
 def get_submission_gallery_filenames(submission):
+    """Extrait les URLs et génère les noms de fichiers pour une galerie."""
     filenames = []
     urls = []
     i = 1
     for item in sorted(submission.gallery_data['items'], key=lambda x: x['id']):
+        if i > 4: break # Limite à 4 images pour un tweet
+        
         media_id = item['media_id']
         meta = submission.media_metadata[media_id]
+        
         if meta['e'] == 'Image':
-            extension = meta['m'].split('/')
-            if len(extension) < 2:
-                continue
-
-            source = meta['s']
-            if (extension[1] == "jpg" or extension[1] == "png" or extension[1] == "jpeg") and check_size(source['u'], MAX_PHOTO_SIZE):
-                urls.append(source['u'])
-                filename = f"{submission.id}-{i}.{extension[1]}"
+            ext = meta['m'].split('/')[-1]
+            source_url = meta['s']['u']
+            
+            if ext in ["jpg", "png", "jpeg"] and check_size(source_url, MAX_PHOTO_SIZE):
+                urls.append(source_url)
+                filename = f"{submission.id}-{i}.{ext}"
                 filenames.append(filename)
                 i += 1
-            
-            if i == 5:
-                break
     
     return filenames, urls
 
 def get_submission_filename(submission):
-    if submission.url.endswith('.jpg'):
-        filename = f"{submission.id}.jpg"
-    elif submission.url.endswith('.jpeg'):
-        filename = f"{submission.id}.jpeg"
-    elif submission.url.endswith('.png'):
-        filename = f"{submission.id}.png"
-    elif submission.url.endswith('.gif'):
-        filename = f"{submission.id}.gif"
-    elif 'v.redd.it' in submission.url:
-        filename = f"{submission.id}.mp4"
-
-    return filename
+    """Génère un nom de fichier unique basé sur l'ID de la soumission."""
+    url = submission.url
+    if url.endswith('.jpg'):
+        return f"{submission.id}.jpg"
+    if url.endswith('.jpeg'):
+        return f"{submission.id}.jpeg"
+    if url.endswith('.png'):
+        return f"{submission.id}.png"
+    if url.endswith('.gif'):
+        return f"{submission.id}.gif"
+    if 'v.redd.it' in url:
+        return f"{submission.id}.mp4"
+    return f"{submission.id}.tmp" # Fallback
 
 def get_submission_media_category(submission):
+    """Détermine la catégorie de média pour l'API Twitter."""
     if "/gallery/" in submission.url or submission.url.endswith(('.jpg', '.png', '.jpeg')):
-        media_category = "tweet_image"
-    elif submission.url.endswith('.gif'):
-        media_category = "tweet_gif"
-    elif 'v.redd.it' in submission.url:
-        media_category = "tweet_video"
-
-    return media_category
+        return "tweet_image"
+    if submission.url.endswith('.gif'):
+        return "tweet_gif"
+    if 'v.redd.it' in submission.url:
+        return "tweet_video"
+    return None
 
 def get_submission_chunked(submission):
-    if "/gallery/" in submission.url or submission.url.endswith(('.jpg', '.png', '.jpeg')):
-        chunked = False
-    elif submission.url.endswith('.gif') or 'v.redd.it' in submission.url:
-        chunked = True
+    """Détermine si l'upload doit être 'chunked' (pour les gros fichiers)."""
+    return submission.url.endswith('.gif') or 'v.redd.it' in submission.url
 
-    return chunked
+def get_submission_video_urls(submission):
+    """
+    Retourne les URLs de la PLUS HAUTE QUALITÉ pour la vidéo et l'audio.
+    Compare la qualité du manifeste DASH avec celle du fallback_url et choisit la meilleure.
+    """
+    if not submission.is_video or "reddit_video" not in submission.media:
+        return None, None
+
+    # On garde le fallback_url comme première source d'information et solution de repli
+    fallback_video_url = submission.media["reddit_video"]["fallback_url"]
+    audio_url = None
+    
+    manifest_url = submission.media["reddit_video"]["dash_url"]
+    base_url = manifest_url.rsplit('/', 1)[0]
+    
+    # On initialise la vidéo finale avec le fallback, au cas où le manifeste serait défaillant
+    final_video_url = fallback_video_url.split('?')[0] # Nettoie l'URL
+
+    try:
+        response = requests.get(manifest_url, timeout=10)
+        response.raise_for_status()
+        manifest_text = response.text
+        root = ET.fromstring(manifest_text)
+        namespace = '{urn:mpeg:dash:schema:mpd:2011}'
+
+        # --- Recherche de la meilleure VIDÉO dans le manifeste ---
+        max_video_bandwidth = -1
+        best_video_file_from_manifest = None
+        for adaptation_set in root.findall(f'.//{namespace}AdaptationSet[@contentType="video"]'):
+            for representation in adaptation_set.findall(f'{namespace}Representation'):
+                bandwidth = int(representation.get('bandwidth', 0))
+                if bandwidth > max_video_bandwidth:
+                    max_video_bandwidth = bandwidth
+                    base_url_tag = representation.find(f'{namespace}BaseURL')
+                    if base_url_tag is not None:
+                        best_video_file_from_manifest = base_url_tag.text
+        
+        # --- Comparaison de la qualité : Manifeste vs Fallback ---
+        if best_video_file_from_manifest:
+            # Extraire la résolution (ex: 720) du nom de fichier du manifeste
+            manifest_res_match = re.search(r'DASH_(\d+)', best_video_file_from_manifest)
+            manifest_resolution = int(manifest_res_match.group(1)) if manifest_res_match else 0
+
+            # Extraire la résolution du fallback_url
+            fallback_res_match = re.search(r'DASH_(\d+)', fallback_video_url)
+            fallback_resolution = int(fallback_res_match.group(1)) if fallback_res_match else 0
+
+            print(f"Qualité vidéo du manifeste: {manifest_resolution}p. Qualité du fallback: {fallback_resolution}p.")
+
+            # Si la qualité du manifeste est meilleure, on l'utilise
+            if manifest_resolution > fallback_resolution:
+                final_video_url = f"{base_url}/{best_video_file_from_manifest}"
+                print(f"Le manifeste offre une meilleure qualité ({manifest_resolution}p). Utilisation de cette source.")
+            else:
+                print(f"Le fallback offre une qualité égale ou supérieure ({fallback_resolution}p). Utilisation du fallback.")
+        
+        # --- Recherche du meilleur AUDIO dans le manifeste (logique inchangée) ---
+        max_audio_bandwidth = -1
+        best_audio_file = None
+        for adaptation_set in root.findall(f'.//{namespace}AdaptationSet[@contentType="audio"]'):
+            for representation in adaptation_set.findall(f'{namespace}Representation'):
+                bandwidth = int(representation.get('bandwidth', 0))
+                if bandwidth > max_audio_bandwidth:
+                    max_audio_bandwidth = bandwidth
+                    base_url_tag = representation.find(f'{namespace}BaseURL')
+                    if base_url_tag is not None:
+                        best_audio_file = base_url_tag.text
+        
+        if best_audio_file:
+            audio_url = f"{base_url}/{best_audio_file}"
+            print(f"✅ Meilleur flux audio trouvé (qualité: {max_audio_bandwidth} bps): {audio_url}")
+
+    except Exception as e:
+        print(f"Une erreur est survenue lors de l'analyse du manifeste ({e}). Utilisation du fallback_url par défaut.")
+
+    if not audio_url:
+        print("⚠️ Pas de flux audio trouvé.")
+
+    print(f"URL vidéo finale choisie : {final_video_url}")
+    return final_video_url, audio_url

@@ -1,12 +1,9 @@
-# twitter.py
-
 import tweepy
 import os
 from dotenv import load_dotenv
 
 load_dotenv('config.env')
 
-# Clés Twitter
 TWITTER_API_KEY = os.getenv('TWITTER_API_KEY')
 TWITTER_API_SECRET = os.getenv('TWITTER_API_SECRET')
 TWITTER_ACCESS_TOKEN = os.getenv('TWITTER_ACCESS_TOKEN')
@@ -39,7 +36,6 @@ def tweet_content(twitter_instance_v1, twitter_instance_v2, message, file_path_l
 
     media_ids = []
     for file_path in file_path_list:
-        # Vérifie que le fichier existe et n'est pas vide avant de l'uploader
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             media = twitter_instance_v1.media_upload(
                 filename=file_path, 

@@ -9,6 +9,7 @@ A Python bot to automatically post top media from a Reddit multireddit to a Twit
 
 -   ✅ **Automated Content Sourcing**: Fetches the hottest submissions from a specified Reddit multireddit.
 -   🖼️ **Multi-Format Support**: Handles single images, galleries, GIFs, and videos.
+-   🔊 **High-Quality Media**: Intelligently selects the best available quality for both video and audio streams.
 -   🐦 **Automatic Tweeting**: Posts the fetched content to a Twitter account using the v1.1 (for media upload) and v2 (for tweeting) APIs.
 -   ✂️ **Smart Text Handling**: Automatically truncates post titles to fit within Twitter's character limit while preserving hashtags and credits.
 -   🧹 **Self-Cleaning**: Deletes downloaded media files after a successful post to conserve disk space.
@@ -19,11 +20,12 @@ A Python bot to automatically post top media from a Reddit multireddit to a Twit
 Before you begin, ensure you have the following:
 -   Python 3.14+ (Developed and tested on 3.14.0)
 -   Git
+-   **FFmpeg**: Required for processing videos with audio.
 -   Developer accounts and API credentials for both **Reddit** and **Twitter**.
 
 ## Installation & Configuration
 
-Follow these steps to get your bot up and running. It is **highly recommended** to use a Python virtual environment to avoid conflicts with other projects.
+Follow these steps to get your bot up and running. It is **highly recommended** to use a Python virtual environment.
 
 **1. Clone the Repository**
 ```bash
@@ -31,7 +33,20 @@ git clone https://github.com/panihabb/reddit-to-twitter-bot.git
 cd reddit-to-twitter-bot
 ```
 
-**2. Create and Activate a Virtual Environment**
+**2. Install FFmpeg**
+
+This bot uses **FFmpeg** to merge video and audio files downloaded from Reddit. It must be installed and accessible from your system's command line.
+
+1.  Download a pre-compiled build of FFmpeg from the [official website](https://ffmpeg.org/download.html) (for Windows, the builds from [Gyan.dev](https://www.gyan.dev/ffmpeg/builds/) are recommended).
+2.  Extract the archive to a permanent location on your computer (e.g., `C:\ffmpeg`).
+3.  **Add the `bin` directory** from your FFmpeg installation (e.g., `C:\ffmpeg\bin`) to your system's **PATH environment variable**. This is a critical step that allows the script to find the `ffmpeg` executable.
+4.  To verify the installation, open a **new** terminal window and run the following command:
+    ```bash
+    ffmpeg -version
+    ```
+    You should see version information printed to the console. If you see an error like "command not found", your PATH is not configured correctly.
+
+**3. Create and Activate a Virtual Environment**
 
 *   On **Windows**:
     ```bash
@@ -44,13 +59,13 @@ cd reddit-to-twitter-bot
     source venv/bin/activate
     ```
 
-**3. Install Dependencies**
+**4. Install Python Dependencies**
 Install all the required Python libraries from the `requirements.txt` file.
 ```bash
 pip install -r requirements.txt
 ```
 
-**4. Configure Environment Variables**
+**5. Configure Environment Variables**
 This project uses a `.env` file to securely manage API keys. Create a file named `.env` in the root of the project directory and add your credentials.
 
 You can use the `.env.example` as a template:
@@ -102,13 +117,13 @@ For a truly automated experience, you can schedule these scripts to run periodic
 
 ## Project Structure
 
--   **`main.py`**: The main entry point of the application. It orchestrates the entire process from fetching a Reddit submission to posting it on Twitter.
--   **`reddit.py`**: Handles all interactions with the Reddit API via the `praw` library. Responsible for fetching, filtering, and validating submissions.
--   **`twitter.py`**: Manages all interactions with the Twitter API via the `tweepy` library. It handles media uploads and tweet creation.
--   **`delete_tweets.py`**: An optional utility script to perform maintenance on the Twitter account by deleting old or unpopular tweets.
+-   **`main.py`**: The main entry point of the application.
+-   **`reddit.py`**: Handles all interactions with the Reddit API.
+-   **`twitter.py`**: Manages all interactions with the Twitter API.
+-   **`delete_tweets.py`**: An optional utility script for account maintenance.
 -   **`requirements.txt`**: A list of all Python libraries required for the project.
 -   **`.env`**: (You create this) Stores all your secret API keys and credentials.
--   **`/images`**: A temporary directory used to store media files before they are uploaded to Twitter.
+-   **`/images`**: A temporary directory used to store media files.
 
 ## Contributing
 
